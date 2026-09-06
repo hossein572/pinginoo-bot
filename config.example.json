@@ -1,0 +1,27 @@
+{
+  "bot_token": "",
+  "bot_username": "",
+  "panel_url": "https://your-hs-panel.example",
+  "panel_password": "",
+  "admin_ids": [],
+  "required_channel": "@pingino_org",
+  "required_channel_url": "https://t.me/pingino_org",
+  "welcome_message": "به پینگینو خوش اومدی؛ اینجا به دنیای خودت وصل شو! 🐧",
+  "card_number": "",
+  "card_name": "",
+  "support_username": "",
+  "webapp_url": "",
+  "colored_buttons": true,
+  "proxy_url": null,
+  "init_data_max_age": 3600,
+  "panel_profiles": {
+    "regular": {},
+    "gaming": {}
+  },
+  "trial": {
+    "enabled": true,
+    "days": 1,
+    "traffic_gb": 1,
+    "category": "regular"
+  }
+}
