@@ -1,0 +1,21 @@
+# Secrets
+config.json
+users.json
+pending_payments.json
+.env
+
+# Receipts
+receipts/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
