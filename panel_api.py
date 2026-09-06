@@ -1,207 +1,124 @@
-"""
-HS Panel API Client
-Matches the actual HS Panel API endpoints (main.py)
-"""
+"""HS Panel client. Mutating requests never fall back after an ambiguous failure."""
 
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-BOT_DIR = Path(__file__).parent
-CONFIG_FILE = BOT_DIR / "config.json"
-
-def load_config() -> Dict[str, Any]:
-    if CONFIG_FILE.exists():
-        import json
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-CONFIG = load_config()
-
-PANEL_URL = CONFIG.get("panel_url", "http://localhost:8000").rstrip("/")
-PANEL_PASSWORD = CONFIG.get("panel_password", "123456")
-
 
 class PanelAPI:
-    """Client for HS Panel REST API"""
+    def __init__(self, base_url: str, password: str, protocol: str | None = None):
+        self.base = base_url.rstrip("/")
+        self.password = password
+        self.protocol = protocol
+        self._token = None
 
-    def __init__(self, base_url: str = None, password: str = None):
-        self.base = (base_url or PANEL_URL).rstrip("/")
-        self.password = password or PANEL_PASSWORD
-        self._token: Optional[str] = None
-
-    async def _headers(self) -> Dict[str, str]:
-        h = {"Content-Type": "application/json"}
+    async def _req(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        headers = {"Content-Type": "application/json"}
         if self._token:
-            h["Authorization"] = f"Bearer {self._token}"
-        return h
-
-    async def _req(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
-        url = f"{self.base}{path}"
+            headers["Authorization"] = f"Bearer {self._token}"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.request(
-                    method, url,
-                    headers=await self._headers(),
-                    **kwargs
-                )
-                if resp.status_code in (200, 201):
-                    text = resp.text.strip()
-                    if text:
-                        try:
-                            return {"status": "ok", "data": resp.json()}
-                        except Exception:
-                            return {"status": "ok", "data": text}
-                    return {"status": "ok"}
-                return {"status": "error", "code": resp.status_code, "body": resp.text[:300]}
-        except Exception as e:
-            logger.error(f"Panel request failed: {method} {path}: {e}")
-            return {"status": "error", "detail": str(e)}
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.request(method, f"{self.base}{path}", headers=headers, **kwargs)
+            if 200 <= response.status_code < 300:
+                try:
+                    data = response.json() if response.content else {}
+                except ValueError:
+                    data = {}
+                return {"status": "ok", "data": data}
+            return {
+                "status": "error",
+                "code": response.status_code,
+                "uncertain": response.status_code >= 500 or response.status_code == 408,
+            }
+        except httpx.HTTPError:
+            # Do not log tokens, subscription URLs or a potentially sensitive body.
+            logger.warning("HS Panel request failed (%s)", method)
+            return {"status": "error", "uncertain": True}
 
     async def login(self) -> bool:
-        """Login to panel with password, store token"""
+        self._token = None
         result = await self._req("POST", "/api/login", json={"password": self.password})
-        if result.get("status") == "ok":
-            data = result.get("data", {})
-            self._token = (
-                data.get("token") or
-                data.get("access_token") or
-                data.get("key") or
-                ""
-            )
-            return bool(self._token)
-        return False
+        data = result.get("data", {})
+        if result["status"] == "ok" and isinstance(data, dict):
+            self._token = data.get("token") or data.get("access_token") or data.get("key")
+        return bool(self._token)
 
     async def ensure_logged_in(self) -> bool:
-        """Login if not already authenticated"""
         return await self.login()
 
-    # ─── Subs (main endpoint in HS Panel) ──────────────────────────────
+    async def _subscription_request(self, method: str, suffix: str = "", **kwargs):
+        result = await self._req(method, f"/api/subs{suffix}", **kwargs)
+        # Only unsupported endpoints are safe to retry. A timeout/500 may have
+        # already created a subscription and must not produce a second one.
+        if result.get("code") in (404, 405):
+            result = await self._req(method, f"/api/links{suffix}", **kwargs)
+        return result
 
-    async def create_sub(self, name: str, traffic: int, days: int,
-                          email: str = None, protocol: str = None) -> Dict[str, Any]:
-        """Create a subscription on the panel"""
-        payload = {
-            "name": name,
-            "traffic": traffic,  # bytes
-            "days": days,
-        }
+    async def create_sub(
+        self, name: str, traffic: int, days: int, email: str | None = None, protocol: str | None = None
+    ) -> dict:
+        payload = {"name": name, "traffic": traffic, "days": days}
         if email:
             payload["email"] = email
-        if protocol:
-            payload["protocol"] = protocol
-        result = await self._req("POST", "/api/subs", json=payload)
-        if result.get("status") != "ok":
-            result = await self._req("POST", "/api/links", json=payload)
-        return result
+        if protocol or self.protocol:
+            payload["protocol"] = protocol or self.protocol
+        return await self._subscription_request("POST", json=payload)
 
-    async def list_subs(self) -> List[Dict[str, Any]]:
-        """List all subscriptions"""
-        result = await self._req("GET", "/api/subs")
-        if result.get("status") == "ok":
-            data = result.get("data", {})
-            if isinstance(data, list):
-                return data
-            return data.get("subs", data.get("links", []))
-        result2 = await self._req("GET", "/api/links")
-        if result2.get("status") == "ok":
-            d = result2.get("data", {})
-            return d if isinstance(d, list) else d.get("links", [])
-        return []
+    async def create_link(
+        self, traffic_gb: float, days: int, email: str | None = None, label: str | None = None
+    ):
+        return await self.create_sub(label or "pinginoo", round(traffic_gb * 1024**3), days, email)
 
-    async def get_sub(self, uid: str) -> Optional[Dict[str, Any]]:
-        """Get a single subscription"""
-        result = await self._req("GET", f"/api/subs/{uid}")
-        if result.get("status") == "ok":
-            return result.get("data")
-        result2 = await self._req("GET", f"/api/links/{uid}")
-        if result2.get("status") == "ok":
-            return result2.get("data")
-        return None
+    async def update_sub(self, uid: str, **kwargs) -> dict:
+        return await self._subscription_request("PATCH", "/" + quote(str(uid), safe=""), json=kwargs)
 
-    async def update_sub(self, uid: str, **kwargs) -> Dict[str, Any]:
-        """Update subscription (extend days/traffic)"""
-        result = await self._req("PATCH", f"/api/subs/{uid}", json=kwargs)
-        if result.get("status") != "ok":
-            result = await self._req("PATCH", f"/api/links/{uid}", json=kwargs)
-        return result
+    async def extend_link(self, uid: str, days: int, traffic_gb: float) -> dict:
+        return await self.update_sub(uid, days=days, traffic=round(traffic_gb * 1024**3))
+
+    async def get_sub(self, uid: str) -> dict:
+        return await self._subscription_request("GET", "/" + quote(str(uid), safe=""))
+
+    async def list_subs(self) -> list:
+        result = await self._subscription_request("GET")
+        data = result.get("data", {})
+        return data if isinstance(data, list) else data.get("subs", data.get("links", []))
 
     async def delete_sub(self, uid: str) -> bool:
-        """Delete a subscription"""
-        result = await self._req("DELETE", f"/api/subs/{uid}")
-        if result.get("status") == "ok":
-            return True
-        result2 = await self._req("DELETE", f"/api/links/{uid}")
-        return result2.get("status") == "ok"
+        result = await self._subscription_request("DELETE", "/" + quote(str(uid), safe=""))
+        return result["status"] == "ok"
 
-    async def get_sub_link(self, uuid_key: str) -> str:
-        """Get subscription share link"""
-        return f"{self.base}/sub/{uuid_key}"
+    async def get_sub_link(self, uid: str) -> str:
+        return f"{self.base}/sub/{quote(str(uid), safe='')}"
 
-    # ─── Stats & Health ────────────────────────────────────────────────
-
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict:
         result = await self._req("GET", "/stats")
-        if result.get("status") == "ok":
-            return result.get("data", result)
-        return {}
+        return result.get("data", {}) if result["status"] == "ok" else {}
 
     async def health_check(self) -> bool:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.base}/health")
-                return resp.status_code == 200
-        except Exception:
-            return False
+        return (await self._req("GET", "/health"))["status"] == "ok"
 
 
-# Singleton instance
-panel = PanelAPI()
+class DemoPanel(PanelAPI):
+    """Explicitly isolated preview adapter: never contacts a real panel."""
 
+    def __init__(self):
+        super().__init__("https://example.invalid/pinginoo-demo", "")
 
-async def create_config_for_user(
-    email: str,
-    user_id: int,
-    traffic_gb: int,
-    days: int,
-    protocol: str = None
-) -> Optional[Dict[str, Any]]:
-    """Create a config on panel for a user and return result"""
-    logged_in = await panel.ensure_logged_in()
-    if not logged_in:
-        logger.error("Panel login failed")
-        return None
+    async def ensure_logged_in(self):
+        return True
 
-    traffic_bytes = traffic_gb * (1024 ** 3)
-    label = f"user_{user_id}"
+    async def create_link(self, traffic_gb, days, email=None, label=None):
+        return {"status": "ok", "data": {"uuid": "demo_" + label}}
 
-    result = await panel.create_sub(
-        name=label,
-        traffic=traffic_bytes,
-        days=days,
-        email=email,
-        protocol=protocol
-    )
+    async def extend_link(self, uid, days, traffic_gb):
+        return {"status": "ok", "data": {"uuid": uid}}
 
-    if result.get("status") == "ok":
-        data = result.get("data", {})
-        logger.info(f"Config created for user {user_id}: {data.get('uuid', data.get('id', '?'))}")
-        return result
-    else:
-        logger.error(f"Config creation failed: {result}")
-        return None
+    async def get_sub(self, uid):
+        return {"status": "ok", "data": {"uuid": uid}}
 
-
-async def extend_user_config(uuid: str, days: int, traffic_gb: int = None) -> bool:
-    """Extend an existing config"""
-    await panel.ensure_logged_in()
-    kwargs = {"days": days}
-    if traffic_gb:
-        kwargs["traffic"] = traffic_gb * (1024 ** 3)
-    result = await panel.update_sub(uuid, **kwargs)
-    return result.get("status") == "ok"
+    async def health_check(self):
+        return True

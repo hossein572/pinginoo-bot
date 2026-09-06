@@ -19,3 +19,21 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local dependencies and development output
+.venv/
+node_modules/
+.pytest_cache/
+.ruff_cache/
+playwright-report/
+test-results/
+.test-data/
+.demo-data/
+demo-data/
+screenshots/
+
+# Transactional runtime data (back up the data volume, never commit it)
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
