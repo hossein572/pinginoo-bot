@@ -128,13 +128,13 @@ class Store:
                 "id": uid,
                 "username": None,
                 "first_name": "دوست پینگینویی",
-                "email": None,
                 "configs": [],
                 "trial_used": False,
                 "created_at": now_iso(),
                 "is_active": True,
             }
-            user.update({k: v for k, v in profile.items() if k in {"first_name", "username", "email"}})
+            # Historical email fields are left untouched, never collected or reused.
+            user.update({k: v for k, v in profile.items() if k in {"first_name", "username"}})
             self._put(conn, "users", str(uid), user)
             return user
 
@@ -209,7 +209,6 @@ class Store:
                 "price": plan["price"],
                 "traffic_gb": plan["traffic_gb"],
                 "days": plan["days"],
-                "email": user.get("email"),
                 "renewal_id": renewal_id,
                 "status": "awaiting_receipt",
                 "created_at": now_iso(),

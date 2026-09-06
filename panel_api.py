@@ -58,20 +58,14 @@ class PanelAPI:
             result = await self._req(method, f"/api/links{suffix}", **kwargs)
         return result
 
-    async def create_sub(
-        self, name: str, traffic: int, days: int, email: str | None = None, protocol: str | None = None
-    ) -> dict:
+    async def create_sub(self, name: str, traffic: int, days: int, *, protocol: str | None = None) -> dict:
         payload = {"name": name, "traffic": traffic, "days": days}
-        if email:
-            payload["email"] = email
         if protocol or self.protocol:
             payload["protocol"] = protocol or self.protocol
         return await self._subscription_request("POST", json=payload)
 
-    async def create_link(
-        self, traffic_gb: float, days: int, email: str | None = None, label: str | None = None
-    ):
-        return await self.create_sub(label or "pinginoo", round(traffic_gb * 1024**3), days, email)
+    async def create_link(self, traffic_gb: float, days: int, *, label: str | None = None):
+        return await self.create_sub(label or "pinginoo", round(traffic_gb * 1024**3), days)
 
     async def update_sub(self, uid: str, **kwargs) -> dict:
         return await self._subscription_request("PATCH", "/" + quote(str(uid), safe=""), json=kwargs)
@@ -111,7 +105,7 @@ class DemoPanel(PanelAPI):
     async def ensure_logged_in(self):
         return True
 
-    async def create_link(self, traffic_gb, days, email=None, label=None):
+    async def create_link(self, traffic_gb, days, *, label=None):
         return {"status": "ok", "data": {"uuid": "demo_" + label}}
 
     async def extend_link(self, uid, days, traffic_gb):

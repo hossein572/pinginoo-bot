@@ -65,7 +65,6 @@ def seed_demo(shop):
                 "id": 10001,
                 "first_name": "دوست پینگینویی",
                 "username": "pingino_friend",
-                "email": None,
                 "configs": [config],
                 "trial_used": False,
                 "is_active": True,
@@ -80,7 +79,6 @@ def seed_demo(shop):
                 "id": 10002,
                 "first_name": "کاربر نمونه",
                 "username": "demo_user",
-                "email": None,
                 "configs": [],
                 "trial_used": False,
                 "is_active": True,
@@ -94,7 +92,6 @@ def seed_demo(shop):
             "price": 149000,
             "traffic_gb": 60,
             "days": 30,
-            "email": None,
             "renewal_id": None,
         }
         shop.store._put(
@@ -272,8 +269,8 @@ def create_app(config=None, *, demo=None, shop=None, telegram_bot=None):
     @app.post("/api/trial", status_code=201)
     async def trial(request: Request, user=Depends(member)):
         cfg = await shop.claim_trial(user["id"])
-        await notify_delivery(request.app.state.telegram, user["id"], cfg)
-        return shop.snapshot(user["id"])
+        notified = await notify_delivery(request.app.state.telegram, user["id"], cfg)
+        return {**shop.snapshot(user["id"]), "notified": notified}
 
     @app.post("/api/demo/orders/{order_id}/receipt")
     async def demo_receipt(order_id: str, user=Depends(member)):

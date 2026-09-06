@@ -312,3 +312,24 @@ def test_all_admin_service_operations_require_admin(shop, operation):
     with pytest.raises(ShopError) as exc:
         operation(shop)
     assert exc.value.status == 403
+
+
+def test_user_profile_does_not_collect_an_email(shop):
+    user = shop.store.user(7, first_name="دوست من", email="unnecessary@example.invalid")
+    assert user["first_name"] == "دوست من"
+    assert "email" not in user
+
+
+async def test_legacy_email_is_never_reused_or_forwarded_to_panel(shop, panels):
+    old_email = "legacy@example.invalid"
+    shop.store.edit_user(7, lambda user: user.update(email=old_email))
+    order = shop.new_order(7, "regular_plus")
+    assert "email" not in order
+    # Also cover fulfilling an older, already-priced invoice that contained email.
+    shop.store.edit_order(order["id"], lambda p: p.update(email=old_email))
+    shop.submit_receipt(7, order["id"], "receipt")
+    cfg = await shop.approve(1, order["id"])
+    assert "email" not in cfg
+    assert "email" not in panels["regular"].creates[0]
+    assert str(7) in panels["regular"].creates[0]["label"]
+    assert shop.store.user(7)["email"] == old_email  # Historical data is not deleted.

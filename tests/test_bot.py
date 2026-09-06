@@ -168,3 +168,71 @@ def test_legacy_receipt_cannot_traverse_data_directory(config, tmp_path):
     receipt.parent.mkdir()
     receipt.write_bytes(b"jpeg")
     assert legacy_receipt_path(config, {"receipt_path": str(receipt)}) == receipt
+
+
+async def test_checkout_skips_email_for_new_users_and_old_keyboards(shop):
+    update, ctx = update_context(shop, data="plan_regular_plus")
+    ctx.user_data.update(awaiting_email=True, pending_plan="regular_plus")
+    await cb_handler(update, ctx)
+    text = update.callback_query.edit_message_text.call_args.args[0]
+    assert "مبلغ" in text and "تلگرام" in text
+    assert "ایمیل" not in text
+    assert "awaiting_email" not in ctx.user_data and "pending_plan" not in ctx.user_data
+    order = shop.store.orders(7)[0]
+    assert order["user_id"] == 7 and order["status"] == "awaiting_receipt"
+    assert "email" not in order and "email" not in shop.store.user(7)
+
+
+async def test_pasted_email_is_not_collected_from_old_checkout(shop):
+    update, ctx = update_context(shop, text="user@example.invalid")
+    ctx.user_data.update(awaiting_email=True, pending_plan="regular_plus")
+    await handle_message(update, ctx)
+    assert "email" not in shop.store.user(7)
+    assert "awaiting_email" not in ctx.user_data
+    assert "pending_plan" not in ctx.user_data
+    assert not shop.store.orders(7)
+
+
+async def test_trial_is_delivered_as_a_new_private_telegram_message(shop):
+    update, ctx = update_context(shop, data="claim_trial")
+    await cb_handler(update, ctx)
+    cfg = shop.store.user(7)["configs"][0]
+    ctx.bot.send_message.assert_awaited_once()
+    sent = ctx.bot.send_message.call_args.kwargs
+    assert sent["chat_id"] == 7
+    assert cfg["config_link"] in sent["text"]
+    assert "پیام جدا" in update.callback_query.edit_message_text.call_args.args[0]
+
+
+async def test_trial_delivery_failure_keeps_config_and_displays_existing_link(shop, panels):
+    update, ctx = update_context(shop, data="claim_trial")
+    ctx.bot.send_message.side_effect = NetworkError("telegram unavailable")
+    await cb_handler(update, ctx)
+    user = shop.store.user(7)
+    assert user["trial_used"]
+    assert len(user["configs"]) == len(panels["regular"].creates) == 1
+    assert user["configs"][0]["config_link"] in update.callback_query.edit_message_text.call_args.args[0]
+
+
+async def test_payment_approval_sends_config_to_buyer_not_admin(shop):
+    order = shop.new_order(7, "gaming_plus")
+    shop.submit_receipt(7, order["id"], "receipt_photo")
+    update, ctx = update_context(shop, uid=1, data=f"admin:approve:{order['id']}")
+    await cb_handler(update, ctx)
+    cfg = shop.store.user(7)["configs"][0]
+    ctx.bot.send_message.assert_awaited_once()
+    sent = ctx.bot.send_message.call_args.kwargs
+    assert sent["chat_id"] == 7
+    assert cfg["config_link"] in sent["text"]
+    assert "ایمیل" not in sent["text"]
+
+
+async def test_renewal_sends_existing_link_to_buyer_in_telegram(shop, panels):
+    previous = await shop.claim_trial(7)
+    order = shop.new_order(7, "regular_plus", previous["id"])
+    shop.submit_receipt(7, order["id"], "receipt_photo")
+    update, ctx = update_context(shop, uid=1, data=f"admin:approve:{order['id']}")
+    await cb_handler(update, ctx)
+    sent = ctx.bot.send_message.call_args.kwargs
+    assert sent["chat_id"] == 7 and previous["config_link"] in sent["text"]
+    assert len(panels["regular"].creates) == len(panels["regular"].extensions) == 1

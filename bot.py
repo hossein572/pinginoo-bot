@@ -98,6 +98,9 @@ async def access(update, ctx, *, admin=False):
     if update.effective_chat.type != ChatType.PRIVATE:
         await update.effective_message.reply_text("🐧 برای استفاده، در گفتگوی خصوصی ربات /start را بزن.")
         return False
+    # Discard any stale conversation state from the former email checkout.
+    ctx.user_data.pop("awaiting_email", None)
+    ctx.user_data.pop("pending_plan", None)
     shop = service(ctx)
     uid = update.effective_user.id
     shop.store.user(uid, first_name=update.effective_user.first_name, username=update.effective_user.username)
@@ -373,7 +376,17 @@ async def route(update, ctx, data):
     elif data == "claim_trial":
         await render(update, ctx, "⏳ داریم تستت رو آماده می‌کنیم…")
         config = await shop.claim_trial(uid)
-        await config_view(update, ctx, config)
+        if await notify_delivery(ctx.bot, uid, config):
+            await render(
+                update,
+                ctx,
+                "✅ تستت آماده شد؛ لینک کانفیگ در یک پیام جدا همین‌جا در تلگرام ارسال شد.",
+                [[b(ctx, "📦 مشاهدهٔ کانفیگ تست", f"config:{config['id']}")], back(ctx)],
+            )
+        else:
+            # If sending a fresh message fails, try the existing message. The
+            # saved config also remains accessible through /myconfigs.
+            await config_view(update, ctx, config)
     elif data == "my_configs":
         await show_my_configs(update, ctx)
     elif data.startswith(("config:", "renew:")):
@@ -477,7 +490,7 @@ async def show_payment(update, ctx, order):
     rows = []
     if order["status"] == "awaiting_receipt":
         ctx.user_data["active_order"] = order["id"]
-        text += f"مبلغ را به کارت زیر واریز کن:\n<code>{esc(config.get('card_number', ''))}</code>\nبه نام: {esc(config.get('card_name', ''))}\n\nبعد عکس رسید را ارسال کن. سفارش تنها پس از بررسی ادمین فعال می‌شود."
+        text += f"مبلغ را به کارت زیر واریز کن:\n<code>{esc(config.get('card_number', ''))}</code>\nبه نام: {esc(config.get('card_name', ''))}\n\nبعد عکس رسید را ارسال کن. سفارش تنها پس از بررسی ادمین فعال می‌شود.\nلینک کانفیگ مستقیماً همین‌جا در تلگرام برایت ارسال می‌شود."
         rows = [
             [b(ctx, "📤 ارسال عکس رسید", f"receipt:{order['id']}", style="success")],
             [b(ctx, "لغو سفارش", f"cancel:{order['id']}", style="danger")],

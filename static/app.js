@@ -614,7 +614,7 @@ function showPlan(id) {
   modal(
     state.renewal ? "یه نفس تازه برای اتصالت." : "انتخاب خوبی کردی!",
     "جزئیات را بررسی کن و سفارشت را ثبت کن.",
-    `${summary(plan)}${state.renewal ? `<p class="modal-note">${icon("refresh", 15)} تمدید ${e(state.renewal.plan_name)} با حفظ لینک قبلی.</p>` : ""}${state.meta.demo ? '<div class="info-banner demo-notice"><p>این سفارش آزمایشی است؛ هیچ مبلغی واریز نکن. داده‌ها از ربات واقعی جدا هستند.</p></div>' : '<p class="modal-note">پرداخت کارت‌به‌کارت است. بعد از واریز، عکس رسید را داخل ربات بفرست. فعال‌سازی پس از تأیید ادمین انجام می‌شود.</p>'}<div class="modal-actions"><button class="btn btn-primary" data-action="create-order">ثبت سفارش و ادامه ${icon("arrow")}</button><button class="btn btn-outline" data-action="close-modal">برگشت</button></div>`,
+    `${summary(plan)}${state.renewal ? `<p class="modal-note">${icon("refresh", 15)} تمدید ${e(state.renewal.plan_name)} با حفظ لینک قبلی.</p>` : ""}${state.meta.demo ? '<div class="info-banner demo-notice"><p>این سفارش آزمایشی است؛ هیچ مبلغی واریز نکن. داده‌ها از ربات واقعی جدا هستند.</p></div>' : '<p class="modal-note">پرداخت کارت‌به‌کارت است. بعد از واریز، عکس رسید را داخل ربات بفرست. پس از تأیید ادمین، لینک کانفیگ مستقیماً در تلگرام ارسال می‌شود؛ نیازی به ایمیل نیست.</p>'}<div class="modal-actions"><button class="btn btn-primary" data-action="create-order">ثبت سفارش و ادامه ${icon("arrow")}</button><button class="btn btn-outline" data-action="close-modal">برگشت</button></div>`,
   );
 }
 function paymentModal(data) {
@@ -828,12 +828,18 @@ const actions = {
   "claim-trial": (el) =>
     busy(el, async () => {
       state.data = await api("/trial", { method: "POST" });
+      const notified = state.data.notified;
       await navigate("configs");
-      toast(
-        state.meta.demo
-          ? "تست نمایشی ساخته شد؛ این لینک واقعی نیست."
-          : "تستت آماده شد. یه روز مهمون ما باش!",
-      );
+      if (state.meta.demo) {
+        toast("تست نمایشی ساخته شد؛ این لینک واقعی نیست.");
+      } else if (notified) {
+        toast("تستت آماده شد؛ لینک کانفیگ داخل تلگرام برات ارسال شد.");
+      } else {
+        toast(
+          "تست ذخیره شد ولی ارسال پیام تلگرام ناموفق بود؛ ربات را باز کن و /myconfigs را بزن.",
+          true,
+        );
+      }
     }),
   config: (el) => configModal(el.dataset.id),
   "copy-config": (el) => {
@@ -873,17 +879,25 @@ const actions = {
     }),
   "approve-order": (el) =>
     busy(el, async () => {
-      await api(`/admin/orders/${encodeURIComponent(el.dataset.id)}/approve`, {
-        method: "POST",
-      });
+      const result = await api(
+        `/admin/orders/${encodeURIComponent(el.dataset.id)}/approve`,
+        {
+          method: "POST",
+        },
+      );
       await refreshData();
       closeModal();
       shell();
-      toast(
-        state.meta.demo
-          ? "سفارش نمایشی تأیید و کانفیگ نمونه ساخته شد."
-          : "سفارش تأیید و کانفیگ با موفقیت ذخیره شد.",
-      );
+      if (state.meta.demo) {
+        toast("سفارش نمایشی تأیید و کانفیگ نمونه ساخته شد.");
+      } else if (result.notified) {
+        toast("سفارش تأیید و لینک کانفیگ در تلگرام برای خریدار ارسال شد.");
+      } else {
+        toast(
+          "کانفیگ ذخیره شد ولی پیام تلگرام ارسال نشد؛ لینک در کانفیگ‌های منِ خریدار موجود است.",
+          true,
+        );
+      }
     }),
   "reject-confirm": (el) =>
     modal(

@@ -4,7 +4,7 @@ import logging
 from html import escape
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatMemberStatus
 from telegram.error import TelegramError
 
@@ -79,8 +79,25 @@ async def notify_receipt(bot, config: dict, order: dict) -> int:
 
 
 async def notify_delivery(bot, uid: int, config: dict) -> bool:
-    if bot is None:
+    """Deliver the actual link to its owner's private Telegram chat, not by email.
+
+    The subscription is already persisted before this call. A blocked bot or
+    Telegram outage must never cause a second subscription to be provisioned.
+    """
+    link = config.get("config_link")
+    if bot is None or not isinstance(link, str) or not link:
         return False
+    rows = []
+    # Telegram's copy-text buttons allow at most 256 characters. Longer links
+    # remain copyable from the message itself instead of failing delivery.
+    if len(link) <= 256:
+        rows.append([InlineKeyboardButton("📋 کپی لینک کانفیگ", copy_text=CopyTextButton(link))])
+    rows.append(
+        [
+            InlineKeyboardButton("📦 کانفیگ‌های من", callback_data="my_configs"),
+            InlineKeyboardButton("📖 راهنمای اتصال", callback_data="help"),
+        ]
+    )
     try:
         await bot.send_message(
             chat_id=uid,
@@ -88,10 +105,12 @@ async def notify_delivery(bot, uid: int, config: dict) -> bool:
                 f"✅ <b>کانفیگت آماده است!</b>\n\n"
                 f"{escape(config['plan_name'])}\n"
                 f"📦 {config['traffic_gb']} گیگ · {config['days']} روز\n\n"
-                f"<code>{escape(config['config_link'])}</code>\n\n"
+                f"🔗 <b>لینک کانفیگ شما:</b>\n<code>{escape(link)}</code>\n\n"
                 "لینک را کپی و در برنامهٔ اتصال وارد کن. همیشه از «کانفیگ‌های من» هم در دسترس است."
             ),
             parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup(rows),
         )
         return True
     except TelegramError:

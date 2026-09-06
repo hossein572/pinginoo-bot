@@ -42,3 +42,15 @@ def test_gaming_profile_uses_separate_backend_and_protocol(config):
     assert (
         shop.panel("gaming", "https://old-games.example.invalid").base == "https://old-games.example.invalid"
     )
+
+
+async def test_subscription_payload_uses_telegram_label_without_email():
+    panel = PanelAPI("https://panel.example.invalid", "password", protocol="vless")
+    panel._req = AsyncMock(return_value={"status": "ok", "data": {"uuid": "new"}})
+    await panel.create_link(1, 1, label="trial_7_reference")
+    assert panel._req.call_args.kwargs["json"] == {
+        "name": "trial_7_reference",
+        "traffic": 1024**3,
+        "days": 1,
+        "protocol": "vless",
+    }

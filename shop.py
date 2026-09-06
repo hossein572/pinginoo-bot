@@ -195,10 +195,11 @@ class Shop:
         client = self.panel(terms["category"])
         if not await client.ensure_logged_in():
             raise DeliveryError()
+        # Telegram user/order IDs identify the subscription; no email is needed,
+        # including when fulfilling an invoice imported from the old JSON store.
         result = await client.create_link(
             traffic_gb=terms["traffic_gb"],
             days=terms["days"],
-            email=terms.get("email"),
             label=f"{'trial' if trial else terms['category']}_{uid}_{reference}",
         )
         if result.get("status") != "ok":
@@ -224,7 +225,6 @@ class Shop:
             "plan": terms.get("plan_key", "trial"),
             "plan_name": terms.get("plan_name", "تست یک‌روزه پینگینو"),
             "category": terms["category"],
-            "email": terms.get("email"),
             "traffic_gb": terms["traffic_gb"],
             "days": terms["days"],
             "purchased_at": started.isoformat(),

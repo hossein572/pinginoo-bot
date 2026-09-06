@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import signed_data
 from fastapi.testclient import TestClient
-from telegram.error import NetworkError
+from telegram.error import Forbidden, NetworkError
 
 from gateway import check_membership
 from shop import ShopError
@@ -158,11 +158,15 @@ def test_order_api_ignores_no_client_pricing_and_enforces_owner(client, auth):
     assert client.get(f"/api/admin/orders/{order_id}/receipt", headers=auth()).status_code == 403
 
 
-def test_trial_api_delivers_once(client, auth, shop):
+def test_trial_api_delivers_once(client, auth, shop, telegram_bot):
     response = client.post("/api/trial", headers=auth())
     assert response.status_code == 201
     assert response.json()["user"]["trial_used"]
     assert response.json()["configs"][0]["config_link"]
+    assert response.json()["notified"] is True
+    sent = telegram_bot.send_message.call_args.kwargs
+    assert sent["chat_id"] == 7
+    assert response.json()["configs"][0]["config_link"] in sent["text"]
     assert client.post("/api/trial", headers=auth()).status_code == 409
     assert len(shop.store.user(7)["configs"]) == 1
 
@@ -190,3 +194,37 @@ def test_preview_host_is_allowed_without_embedding_rejection(client):
     assert 'dir="rtl"' in response.text
     assert "x-frame-options" not in response.headers
     assert "frame-ancestors *" in response.headers["content-security-policy"]
+
+
+def test_miniapp_trial_reports_delivery_failure_without_consuming_another_trial(
+    client, auth, shop, telegram_bot
+):
+    telegram_bot.send_message.side_effect = Forbidden("bot blocked")
+    response = client.post("/api/trial", headers=auth())
+    assert response.status_code == 201
+    assert response.json()["notified"] is False
+    assert response.json()["configs"][0]["config_link"]
+    assert client.post("/api/trial", headers=auth()).status_code == 409
+    assert len(shop.store.user(7)["configs"]) == 1
+
+
+@pytest.mark.parametrize("delivery_ok", [True, False])
+def test_web_admin_approval_delivers_to_telegram_owner_and_preserves_config_on_failure(
+    client, auth, shop, telegram_bot, panels, delivery_ok
+):
+    response = client.post("/api/orders", headers=auth(7), json={"plan_id": "regular_plus"})
+    assert response.status_code == 201
+    order = response.json()["order"]
+    shop.submit_receipt(7, order["id"], "photo_id")
+    if not delivery_ok:
+        telegram_bot.send_message.side_effect = Forbidden("bot blocked")
+    response = client.post(f"/api/admin/orders/{order['id']}/approve", headers=auth(1))
+    assert response.json() == {"ok": True, "notified": delivery_ok}
+    cfg = shop.store.user(7)["configs"][0]
+    sent = telegram_bot.send_message.call_args.kwargs
+    assert sent["chat_id"] == 7
+    assert cfg["config_link"] in sent["text"]
+    assert "email" not in panels["regular"].creates[0]
+    assert client.post(f"/api/admin/orders/{order['id']}/approve", headers=auth(1)).status_code == 409
+    assert len(panels["regular"].creates) == 1
+    assert len(shop.store.user(7)["configs"]) == 1
